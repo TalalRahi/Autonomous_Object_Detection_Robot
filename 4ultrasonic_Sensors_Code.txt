@@ -1,0 +1,181 @@
+// =====================
+// Pin Definitions
+// =====================
+// Motor pins (L298N)
+const int LeftMotorForward  = 2;
+const int LeftMotorBackward = 3;
+const int RightMotorForward = 4;
+const int RightMotorBackward= 5;
+const int ENA = 9;   // Left motor speed (PWM)
+const int ENB = 10;  // Right motor speed (PWM)
+
+// Ultrasonic sensor pins
+#define trigFront A0
+#define echoFront A1
+#define trigRight A2
+#define echoRight A3
+#define trigLeft  A4
+#define echoLeft  A5
+#define trigBack  6
+#define echoBack  7
+
+// =====================
+// Global Variables
+// =====================
+int motorSpeed = 150;    // PWM speed 0-255
+int safeDistance = 20;   // cm threshold to detect obstacle
+int minValid = 5;        // ignore readings <5 cm
+int maxValid = 200;      // ignore readings >200 cm
+
+unsigned long roamStart = 0;   // track roaming start time
+bool roaming = true;           // state: roaming or waiting
+
+// =====================
+// Setup
+// =====================
+void setup() {
+  // Motor setup
+  pinMode(LeftMotorForward, OUTPUT);
+  pinMode(LeftMotorBackward, OUTPUT);
+  pinMode(RightMotorForward, OUTPUT);
+  pinMode(RightMotorBackward, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+
+  // Ultrasonic pins
+  pinMode(trigFront, OUTPUT);
+  pinMode(echoFront, INPUT);
+  pinMode(trigRight, OUTPUT);
+  pinMode(echoRight, INPUT);
+  pinMode(trigLeft, OUTPUT);
+  pinMode(echoLeft, INPUT);
+  pinMode(trigBack, OUTPUT);
+  pinMode(echoBack, INPUT);
+
+  Serial.begin(9600);
+
+  roamStart = millis(); // initialize timer
+}
+
+// =====================
+// Motor Control Functions
+// =====================
+void moveForward() {
+  analogWrite(ENA, motorSpeed);
+  analogWrite(ENB, motorSpeed);
+  digitalWrite(LeftMotorForward, HIGH);
+  digitalWrite(LeftMotorBackward, LOW);
+  digitalWrite(RightMotorForward, HIGH);
+  digitalWrite(RightMotorBackward, LOW);
+}
+
+void moveBackward() {
+  analogWrite(ENA, motorSpeed);
+  analogWrite(ENB, motorSpeed);
+  digitalWrite(LeftMotorForward, LOW);
+  digitalWrite(LeftMotorBackward, HIGH);
+  digitalWrite(RightMotorForward, LOW);
+  digitalWrite(RightMotorBackward, HIGH);
+}
+
+void turnLeft() {
+  analogWrite(ENA, motorSpeed);
+  analogWrite(ENB, motorSpeed);
+  digitalWrite(LeftMotorForward, LOW);
+  digitalWrite(LeftMotorBackward, HIGH);
+  digitalWrite(RightMotorForward, HIGH);
+  digitalWrite(RightMotorBackward, LOW);
+}
+
+void turnRight() {
+  analogWrite(ENA, motorSpeed);
+  analogWrite(ENB, motorSpeed);
+  digitalWrite(LeftMotorForward, HIGH);
+  digitalWrite(LeftMotorBackward, LOW);
+  digitalWrite(RightMotorForward, LOW);
+  digitalWrite(RightMotorBackward, HIGH);
+}
+
+void stopBot() {
+  digitalWrite(LeftMotorForward, LOW);
+  digitalWrite(LeftMotorBackward, LOW);
+  digitalWrite(RightMotorForward, LOW);
+  digitalWrite(RightMotorBackward, LOW);
+}
+
+// =====================
+// Ultrasonic Function
+// =====================
+long getDistance(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  long duration = pulseIn(echoPin, HIGH, 20000);
+  long distance = duration * 0.034 / 2;
+
+  // Filter invalid readings
+  if (distance < minValid || distance > maxValid) distance = maxValid;
+  return distance;
+}
+
+// =====================
+// Main Loop
+// =====================
+void loop() {
+  unsigned long currentTime = millis();
+
+  // Check if roaming for more than 20s
+  if (currentTime - roamStart < 20000) {
+    // === Normal obstacle avoidance logic ===
+    long front = getDistance(trigFront, echoFront);
+    long right = getDistance(trigRight, echoRight);
+    long left  = getDistance(trigLeft, echoLeft);
+    long back  = getDistance(trigBack, echoBack);
+
+    Serial.print("Front: "); Serial.print(front);
+    Serial.print(" Right: "); Serial.print(right);
+    Serial.print(" Left: "); Serial.print(left);
+    Serial.print(" Back: "); Serial.println(back);
+
+    if (front < safeDistance) {
+      stopBot();
+      Serial.println("Obstacle detected! Thinking...");
+      delay(5000); // pause for decision
+
+      if (left > right && left > safeDistance) {
+        Serial.println("Turning Left");
+        turnLeft();
+        delay(600);
+      }
+      else if (right > left && right > safeDistance) {
+        Serial.println("Turning Right");
+        turnRight();
+        delay(600);
+      }
+      else if (back > safeDistance) {
+        Serial.println("Moving Backward");
+        moveBackward();
+        delay(600);
+      }
+      else {
+        Serial.println("Surrounded! Stopping");
+        stopBot();
+        delay(1000);
+      }
+    }
+    else {
+      moveForward();
+    }
+
+    delay(50);
+
+  } else {
+    // Roaming time finished -> pause for camera
+    stopBot();
+    Serial.println("Pausing for camera capture...");
+    delay(15000);  // stop for 15s (use 10000 for 10s)
+    roamStart = millis(); // reset timer for next cycle
+  }
+}

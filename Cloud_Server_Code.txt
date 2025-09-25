@@ -1,0 +1,81 @@
+import cv2
+from ultralytics import YOLO
+import requests
+import numpy as np
+import time
+
+# ========== CONFIG ==========
+ESP32_URL = 'http://14053a22fb53.ngrok-free.app/capture'  # ESP32-CAM snapshot endpoint
+BOT_TOKEN = 'YOUR_BOT_TOKEN'   # ⚠️ Replace with your Telegram bot token
+CHAT_ID = 6150019734           # Telegram chat ID (your ID or group ID)
+ALERT_CLASSES = ['knife', 'scissors']  # Object classes to trigger an alert
+FRAME_INTERVAL = 3             # Time gap (seconds) between captures
+SAVE_PATH = 'alert.jpg'        # Temporary path to save alert images
+MAX_RETRIES = 3                # Retry attempts if ESP32 request fails
+
+# Load YOLOv8 model (nano version = fast & lightweight)
+model = YOLO('yolov8n.pt')
+
+print("Starting ESP32-CAM detection...")
+
+# Main loop runs continuously
+while True:
+    try:
+        # --------- STEP 1: Fetch frame from ESP32-CAM with retries ---------
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = requests.get(ESP32_URL, timeout=20)
+                if resp.status_code == 200:
+                    break  # Success, got the frame
+                else:
+                    print(f"Failed to grab frame, status: {resp.status_code}")
+            except requests.exceptions.RequestException as e:
+                print(f"Attempt {attempt+1}/{MAX_RETRIES} failed: {e}")
+                time.sleep(1)
+        else:
+            # If all retries failed, skip this cycle
+            print("Max retries reached, skipping this frame...")
+            time.sleep(FRAME_INTERVAL)
+            continue
+
+        # --------- STEP 2: Decode image into OpenCV format ---------
+        img_arr = np.frombuffer(resp.content, np.uint8)
+        frame = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+        frame = cv2.resize(frame, (640, 480))  # Resize for faster YOLO inference
+
+        # --------- STEP 3: Run YOLO object detection ---------
+        results = model(frame)
+
+        # --------- STEP 4: Process detections ---------
+        for r in results:
+            for box in r.boxes:
+                cls = int(box.cls[0])         # Class ID
+                label = model.names[cls]      # Class name
+
+                # If detected object is in ALERT_CLASSES, trigger alert
+                if label in ALERT_CLASSES:
+                    print(f'⚠️ Detected {label}! Sending Telegram alert...')
+
+                    # Save current frame (unannotated)
+                    cv2.imwrite(SAVE_PATH, frame)
+
+                    # --------- STEP 5: Send alert image to Telegram ---------
+                    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto'
+                    files = {'photo': open(SAVE_PATH, 'rb')}
+                    data = {'chat_id': CHAT_ID, 'caption': f'⚠️ Detected {label}!'}
+
+                    try:
+                        resp_telegram = requests.post(url, files=files, data=data, timeout=10)
+                        print(f'Telegram response: {resp_telegram.status_code} {resp_telegram.text}')
+                    except Exception as e:
+                        print(f"Failed to send Telegram alert: {e}")
+
+        # --------- STEP 6: Wait before next frame ---------
+        time.sleep(FRAME_INTERVAL)
+
+    except KeyboardInterrupt:
+        print("Stopping detection...")
+        break
+    except Exception as e:
+        print(f"Error: {e}")
+        time.sleep(FRAME_INTERVAL)
